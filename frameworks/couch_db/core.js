@@ -152,6 +152,7 @@ SCUDS.CouchDBDataSource = SC.DataSource.extend({
     url = (db) ? '%@/'.fmt(db) : null;
     hash = store.readDataHash(storeKey) || {};
     hash._id = hash[pk];
+    hash[recordType.toString().replace('.','_').toLowerCase()] = YES;
     // if no url is found, we don't know how to handle this record
     if (!url) return NO;
     
@@ -165,11 +166,52 @@ SCUDS.CouchDBDataSource = SC.DataSource.extend({
     SC.Request.postUrl(url, hash)
       .set('isJSON', YES)
       .header('Accept', 'application/json, *.*')
-      .notify(this, this._didCreateRecord, params)
+      .notify(this, this._wasSuccessfulRecordTransaction, params)
       .send();
 
     return YES;
   },
+
+			  
+//	_didCreateRecord : function(response, params) {
+//		var store = params.store, storeKey = params.storeKey;
+//		var couchRes = this.processResponse(response);
+//		if (couchRes.ok) {
+//			// Add _id and _rev to the local document for further server
+//			// interaction.
+//			var localDoc = store.readEditableDataHash(storeKey);
+//			localDoc._id = couchRes.id;
+//			localDoc._rev = couchRes.rev;
+//			store.dataSourceDidComplete(storeKey, localDoc, couchRes.id);
+//		} else {
+//			store.dataSourceDidError(storeKey, response);
+//		}
+//	},
+//
+//	processResponse : function(response) {
+//		if (SC.ok(response)) {
+//			var body = response.get('encodedBody');
+//			var couchResponse = SC.json.decode(body);
+//			var ok = couchResponse.ok;
+//			if (ok != YES)
+//				return {
+//					"error" : true,
+//					"response" : couchResponse
+//				};
+//			var id = couchResponse.id;
+//			var rev = couchResponse.rev;
+//			return {
+//				"ok" : true,
+//				"id" : id,
+//				"rev" : rev
+//			};
+//		} else {
+//			return {
+//				"error" : true,
+//				"response" : response
+//			};
+//		}
+//	},
   
   /**************************************************
   *
@@ -307,9 +349,16 @@ SCUDS.CouchDBDataSource = SC.DataSource.extend({
 
     if (SC.$ok(response)) {
       hash = response.get('body') || {};
-      hash[pk] = hash._id;
-      SC.Store.replaceIdFor(storeKey, hash._id);
-      store.dataSourceDidComplete(storeKey, hash);
+      if (params.dataType !== "Update") {
+        hash[pk] = hash._id;
+        SC.Store.replaceIdFor(storeKey, hash._id);
+        store.dataSourceDidComplete(storeKey, hash);
+      } else {
+      	// Update the revision
+      	var localDoc = store.readEditableDataHash(storeKey);
+      	localDoc._rev = hash.rev;
+      	store.dataSourceDidComplete(storeKey, localDoc);
+      }
       callback = 'successful'+params.dataType;
     // error: indicate as such...response == error
     } else {
