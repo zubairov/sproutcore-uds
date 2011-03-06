@@ -51,7 +51,7 @@ SCUDS.CouchDBDataSource = SC.DataSource.extend({
       SC.Logger.error('SCUDS.CouchDBDataSource._fetchRecordType(): Error retrieving records from data source: Invalid record type.');
       return;
     }
-    
+    SC.debug('Fetching records of type %@', recordType);
     // create params...
     params = {store: store, query: query, recordType: recordType};
     // TODO: [EG] check to see if we need to make a specific view call
@@ -84,6 +84,8 @@ SCUDS.CouchDBDataSource = SC.DataSource.extend({
 
       // TODO: [EG] loop through the data
       ret = this._parseCouchViewResponse(recordType, response.get('body'));
+      SC.debug('Fetched %@ records of type %@', ret.length, recordType);
+
       store.loadRecords(recordType, ret);
       
       if(query.numRecordTypesHandled >= query.numRecordTypes){
@@ -125,6 +127,7 @@ SCUDS.CouchDBDataSource = SC.DataSource.extend({
     if (!url) return NO;
     
     params = {store: store, storeKey: storeKey, recordType: recordType, dataType: 'Fetch'};
+    SC.debug('Retrieve record with ID %@ and URL %@',id, url);
 
     // we can handle it, get the URL.
     SC.Request.getUrl(url)
@@ -162,6 +165,8 @@ SCUDS.CouchDBDataSource = SC.DataSource.extend({
     params.recordType = recordType;
     params.dataType = 'Create';
 
+    SC.debug('Creating record with URL %@',url);
+
     // we can handle it, get the URL.
     SC.Request.postUrl(url, hash)
       .set('isJSON', YES)
@@ -171,47 +176,6 @@ SCUDS.CouchDBDataSource = SC.DataSource.extend({
 
     return YES;
   },
-
-			  
-//	_didCreateRecord : function(response, params) {
-//		var store = params.store, storeKey = params.storeKey;
-//		var couchRes = this.processResponse(response);
-//		if (couchRes.ok) {
-//			// Add _id and _rev to the local document for further server
-//			// interaction.
-//			var localDoc = store.readEditableDataHash(storeKey);
-//			localDoc._id = couchRes.id;
-//			localDoc._rev = couchRes.rev;
-//			store.dataSourceDidComplete(storeKey, localDoc, couchRes.id);
-//		} else {
-//			store.dataSourceDidError(storeKey, response);
-//		}
-//	},
-//
-//	processResponse : function(response) {
-//		if (SC.ok(response)) {
-//			var body = response.get('encodedBody');
-//			var couchResponse = SC.json.decode(body);
-//			var ok = couchResponse.ok;
-//			if (ok != YES)
-//				return {
-//					"error" : true,
-//					"response" : couchResponse
-//				};
-//			var id = couchResponse.id;
-//			var rev = couchResponse.rev;
-//			return {
-//				"ok" : true,
-//				"id" : id,
-//				"rev" : rev
-//			};
-//		} else {
-//			return {
-//				"error" : true,
-//				"response" : response
-//			};
-//		}
-//	},
   
   /**************************************************
   *
@@ -239,6 +203,8 @@ SCUDS.CouchDBDataSource = SC.DataSource.extend({
     params.recordType = recordType;
     params.dataType = 'Update';
 
+    SC.debug('Updating record %@ with ID %@ and revision %@',recordType, id, hash._rev);
+
     // we can handle it, get the URL.
     SC.Request.putUrl(url, hash)
       .set('isJSON', YES)
@@ -254,26 +220,29 @@ SCUDS.CouchDBDataSource = SC.DataSource.extend({
   * CODE FOR DELETING A SINGLE RECORD
   *
   ***************************************************/
-  deleteRecord: function(store, storeKey, params) {
+  destroyRecord: function(store, storeKey, params) {
     // debugger;
     // map storeKey back to record type
     var recordType = SC.Store.recordTypeFor(storeKey),
         db = recordType.prototype.recordDatabase || this.get('database') || 'data',
-        url, hash, id;
+        url, id;
         
     // decide on the URL based on the record type
     id = store.idFor(storeKey);
+    var data = store.readDataHash(storeKey);
     url = (db) ? '%@/%@'.fmt(db, id) : null;
+    if (!id) return NO;
     if (!url) return NO;
-    
+    url = url + "?rev=" + data._rev;
     params = params || {};
     params.store = store;
     params.storeKey = storeKey;
     params.recordType = recordType;
     params.dataType = 'Delete';
 
+    SC.debug('Deleting record with ID %@ and URL %@',id, url);
     // we can handle it, get the URL.
-    SC.Request.deleteUrl(url, hash)
+    SC.Request.deleteUrl(url)
       .set('isJSON', YES)
       .header('Accept', 'application/json, *.*')
       .notify(this, this._didDeleteRecord, params)
@@ -288,7 +257,8 @@ SCUDS.CouchDBDataSource = SC.DataSource.extend({
 
     // normal: load into store...response == dataHash
     if (SC.$ok(response)) {
-      store.dataSourceDidComplete(storeKey, response.get('body'));
+    	SC.debug('Deleted record with response %@',response);
+      store.dataSourceDidDestroy(storeKey);
       
     // error: indicate as such...response == error
     } else {
@@ -349,15 +319,25 @@ SCUDS.CouchDBDataSource = SC.DataSource.extend({
 
     if (SC.$ok(response)) {
       hash = response.get('body') || {};
-      if (params.dataType !== "Update") {
-        hash[pk] = hash._id;
-        SC.Store.replaceIdFor(storeKey, hash._id);
-        store.dataSourceDidComplete(storeKey, hash);
-      } else {
+      
+      if (params.dataType === "Create") {
+      	SC.debug('Created record %@ with id %@ and revision %@',rt, hash.id, hash.rev);
+      	var localDoc = store.readEditableDataHash(storeKey);
+        SC.Store.replaceIdFor(storeKey, hash.id);
+      	localDoc._rev = hash.rev;
+      	localDoc._id = hash.id;
+      	store.dataSourceDidComplete(storeKey, localDoc);
+      } else if (params.dataType === "Update"){
       	// Update the revision
+      	SC.debug('Updated record %@ with id %@ and revision %@', rt, hash.id, hash.rev);
       	var localDoc = store.readEditableDataHash(storeKey);
       	localDoc._rev = hash.rev;
       	store.dataSourceDidComplete(storeKey, localDoc);
+      } else {
+      	// Retrieve
+      	SC.debug('Retrieved record %@ with id %@ and revision %@',rt, hash._id, hash._rev);
+        SC.Store.replaceIdFor(storeKey, hash._id);
+      	store.dataSourceDidComplete(storeKey, hash);
       }
       callback = 'successful'+params.dataType;
     // error: indicate as such...response == error
